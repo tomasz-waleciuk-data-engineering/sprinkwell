@@ -72,7 +72,11 @@ def excel_serial_to_datetime(date_serial, time_serial) -> datetime:
     """
     Convert Excel serial date + time to Python datetime.
     
-    Verified against your data:
+    Handles time >= 1 (when reading crosses midnight):
+      Integer part = extra days
+      Decimal part = time of day
+    
+    Verified:
       44741 + 0.4972222222 → 29/06/2022 11:56
     """
     if date_serial is None or time_serial is None:
@@ -82,14 +86,18 @@ def excel_serial_to_datetime(date_serial, time_serial) -> datetime:
         date_serial = float(date_serial)
         time_serial = float(time_serial) if time_serial else 0.0
         
-        # Excel epoch: December 29, 1899 (verified)
-        excel_epoch = datetime(1899, 12, 29)
+        # Handle time >= 1 (crossed midnight)
+        extra_days = int(time_serial)
+        time_fraction = time_serial - extra_days
         
-        # Date part
-        date_part = excel_epoch + timedelta(days=date_serial)
+        # Excel epoch: December 30, 1899 (FIXED)
+        excel_epoch = datetime(1899, 12, 30)
         
-        # Time part: fraction of day
-        total_seconds = time_serial * 24 * 60 * 60
+        # Date part: add days + any extra days from time
+        date_part = excel_epoch + timedelta(days=date_serial + extra_days)
+        
+        # Time part: use rounding to fix floating-point precision
+        total_seconds = round(time_fraction * 24 * 60 * 60)  # FIXED: round()
         hours = int(total_seconds // 3600)
         minutes = int((total_seconds % 3600) // 60)
         seconds = int(total_seconds % 60)
