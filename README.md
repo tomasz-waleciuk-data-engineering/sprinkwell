@@ -1,3 +1,4 @@
+```text
 Repository structure:
 
 sprinkwell/
@@ -7,3 +8,4 @@ sprinkwell/
 ├── transform.py
 ├── requirements.txt
 └── processed_data.parquet   ← auto-generated
+```
