@@ -72,12 +72,13 @@ def excel_serial_to_datetime(date_serial, time_serial) -> datetime:
     """
     Convert Excel serial date + time to Python datetime.
     
-    Handles time >= 1 (when reading crosses midnight):
-      Integer part = extra days
-      Decimal part = time of day
+    Time > 1: IGNORE integer part, use only fractional part for time.
     
-    Verified:
-      44741 + 0.4972222222 → 29/06/2022 11:56
+    Example: 
+      Date=45315, Time=12.87172619
+      → Date: 45315 (as-is)
+      → Time: 0.87172619 only (drop the 12)
+      → Result: 2024-01-24 20:55
     """
     if date_serial is None or time_serial is None:
         return None
@@ -86,18 +87,17 @@ def excel_serial_to_datetime(date_serial, time_serial) -> datetime:
         date_serial = float(date_serial)
         time_serial = float(time_serial) if time_serial else 0.0
         
-        # Handle time >= 1 (crossed midnight)
-        extra_days = int(time_serial)
-        time_fraction = time_serial - extra_days
+        # ONLY use fractional part of time (discard integer part)
+        time_fraction = time_serial % 1
         
-        # Excel epoch: December 30, 1899 (FIXED)
+        # Excel epoch: December 30, 1899
         excel_epoch = datetime(1899, 12, 30)
         
-        # Date part: add days + any extra days from time
-        date_part = excel_epoch + timedelta(days=date_serial + extra_days)
+        # Date part: use date serial as-is (don't add integer from time)
+        date_part = excel_epoch + timedelta(days=date_serial)
         
-        # Time part: use rounding to fix floating-point precision
-        total_seconds = round(time_fraction * 24 * 60 * 60)  # FIXED: round()
+        # Time part: fractional part only
+        total_seconds = round(time_fraction * 24 * 60 * 60)
         hours = int(total_seconds // 3600)
         minutes = int((total_seconds % 3600) // 60)
         seconds = int(total_seconds % 60)
