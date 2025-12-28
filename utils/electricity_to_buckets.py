@@ -1,5 +1,6 @@
 import polars as pl
 from datetime import datetime, timedelta, time
+import os
 
 # ============================================
 # CONFIGURATION - EASY TO CHANGE
@@ -8,11 +9,20 @@ from datetime import datetime, timedelta, time
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/15LJer7zyH6wd_9qDHOl-PeU7FKx-neap9IwlCyCSSf4/export?format=csv&gid=0"
 
 # First row to include (Google Sheets row number)
-# Row 305 = 29/06/2022, 11:56
 START_ROW = 305
 
-# Output file
-OUTPUT_FILE = "processed_data.parquet"
+# Output paths (relative to repo root)
+OUTPUT_DIR_BINS = "output/electricity/bins"
+OUTPUT_DIR_READINGS = "output/electricity/readings"
+
+OUTPUT_FILE_PARQUET = os.path.join(OUTPUT_DIR_BINS, "processed_data.parquet")
+OUTPUT_FILE_RAW_CSV = os.path.join(OUTPUT_DIR_READINGS, "raw_readings.csv")
+
+# ============================================
+# Create output directories if they don't exist
+# ============================================
+os.makedirs(OUTPUT_DIR_BINS, exist_ok=True)
+os.makedirs(OUTPUT_DIR_READINGS, exist_ok=True)
 
 # ============================================
 # 1. Load raw data from Google Sheets
@@ -40,13 +50,71 @@ print("\nSelected columns (B, C, E, F):")
 print(df.head(10))
 
 # Skip rows before START_ROW
-# Row 1 in Sheets = index 0 (when has_header=False)
-# So Sheets row 305 = index 304
 skip_count = START_ROW - 1
 df = df.slice(skip_count, None)
 
 print(f"\nShape after starting from row {START_ROW}:", df.shape)
 print(df.head())
+
+# ============================================
+# 1.5 Save raw readings to CSV (human-readable)
+# ============================================
+print(f"\n💾 Preparing raw readings for export...")
+
+def excel_serial_to_date_string(date_serial) -> str:
+    """Convert Excel serial date to YYYY-MM-DD string"""
+    try:
+        date_serial = float(date_serial)
+        excel_epoch = datetime(1899, 12, 30)
+        date_part = excel_epoch + timedelta(days=date_serial)
+        return date_part.strftime("%Y-%m-%d")
+    except:
+        return None
+
+def excel_serial_to_time_string(time_serial) -> str:
+    """Convert Excel serial time to HH:MM:SS string (using only fractional part)"""
+    try:
+        time_serial = float(time_serial) if time_serial else 0.0
+        time_fraction = time_serial % 1  # Only decimal part
+        total_seconds = round(time_fraction * 24 * 60 * 60)
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = int(total_seconds % 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    except:
+        return None
+
+# Convert to human-readable format
+dates_readable = [excel_serial_to_date_string(d) for d in df['Date'].to_list()]
+times_readable = [excel_serial_to_time_string(t) for t in df['Time'].to_list()]
+
+df_raw_export = pl.DataFrame({
+    'Date': dates_readable,
+    'Time': times_readable,
+    'P': df['P'].to_list(),
+    'OP': df['OP'].to_list(),
+})
+
+# Remove rows where Time, P, or OP are null/empty
+original_count = df_raw_export.height
+df_raw_export = df_raw_export.filter(
+    (pl.col("Time").is_not_null()) & 
+    (pl.col("Time") != "") &
+    (pl.col("P").is_not_null()) & 
+    (pl.col("P") != "") &
+    (pl.col("OP").is_not_null()) & 
+    (pl.col("OP") != "")
+)
+removed_count = original_count - df_raw_export.height
+
+print(f"\nRaw readings sample:")
+print(df_raw_export.head(10))
+
+if removed_count > 0:
+    print(f"\n⚠️ Removed {removed_count} rows with null values")
+
+df_raw_export.write_csv(OUTPUT_FILE_RAW_CSV)
+print(f"✅ Saved {df_raw_export.height:,} rows to {OUTPUT_FILE_RAW_CSV}")
 
 # ============================================
 # 2. BST/GMT conversion functions
@@ -73,12 +141,6 @@ def excel_serial_to_datetime(date_serial, time_serial) -> datetime:
     Convert Excel serial date + time to Python datetime.
     
     Time > 1: IGNORE integer part, use only fractional part for time.
-    
-    Example: 
-      Date=45315, Time=12.87172619
-      → Date: 45315 (as-is)
-      → Time: 0.87172619 only (drop the 12)
-      → Result: 2024-01-24 20:55
     """
     if date_serial is None or time_serial is None:
         return None
@@ -93,7 +155,7 @@ def excel_serial_to_datetime(date_serial, time_serial) -> datetime:
         # Excel epoch: December 30, 1899
         excel_epoch = datetime(1899, 12, 30)
         
-        # Date part: use date serial as-is (don't add integer from time)
+        # Date part: use date serial as-is
         date_part = excel_epoch + timedelta(days=date_serial)
         
         # Time part: fractional part only
@@ -134,42 +196,42 @@ print("\nSample conversions (first 5):")
 for i in range(min(5, len(dates))):
     print(f"  Excel: {dates[i]}, {times[i]} → Local: {local_datetimes[i]} → UTC: {utc_datetimes[i]}")
 
-df = pl.DataFrame({
+df_transformed = pl.DataFrame({
     'UTC_DateTime': utc_datetimes,
     'P': ps,
     'OP': ops
 })
 
 # Convert P and OP to float
-df = df.with_columns([
+df_transformed = df_transformed.with_columns([
     pl.col("P").cast(pl.Float64),
     pl.col("OP").cast(pl.Float64),
 ])
 
 # Filter out rows where datetime conversion failed
-original_count = df.height
-df = df.filter(pl.col("UTC_DateTime").is_not_null())
-filtered_count = df.height
+original_count = df_transformed.height
+df_transformed = df_transformed.filter(pl.col("UTC_DateTime").is_not_null())
+filtered_count = df_transformed.height
 if original_count != filtered_count:
     print(f"\n⚠️ Filtered out {original_count - filtered_count} rows with invalid dates")
 
 print("\nAfter UTC conversion:")
-print(df.head())
+print(df_transformed.head())
 
 # ============================================
 # 4. Sort and calculate deltas
 # ============================================
-df = df.sort("UTC_DateTime")
-df = df.with_columns([
+df_transformed = df_transformed.sort("UTC_DateTime")
+df_transformed = df_transformed.with_columns([
     (pl.col("P").shift(-1) - pl.col("P")).alias("Delta_P"),
     (pl.col("OP").shift(-1) - pl.col("OP")).alias("Delta_OP"),
     pl.col("UTC_DateTime").shift(-1).alias("Next_DateTime")
 ])
 
-df = df.filter(pl.col("Next_DateTime").is_not_null())
+df_transformed = df_transformed.filter(pl.col("Next_DateTime").is_not_null())
 
 print("\nAfter delta calculation:")
-print(df.head())
+print(df_transformed.head())
 
 # ============================================
 # 5. Generate 1-minute grid and expand
@@ -229,9 +291,9 @@ all_minute_grids = []
 all_p_values = []
 all_op_values = []
 
-total_rows = df.height
+total_rows = df_transformed.height
 
-for i, row in enumerate(df.iter_rows(named=True)):
+for i, row in enumerate(df_transformed.iter_rows(named=True)):
     if i % 100 == 0:
         print(f"  Processing row {i}/{total_rows}...")
     
@@ -300,8 +362,8 @@ print(boundary_check.head(20))
 # ============================================
 # 9. Export for Power BI (PARQUET)
 # ============================================
-result.write_parquet(OUTPUT_FILE)
-print(f"\n✅ Saved to {OUTPUT_FILE} ({result.height:,} rows)")
+result.write_parquet(OUTPUT_FILE_PARQUET)
+print(f"\n✅ Saved to {OUTPUT_FILE_PARQUET} ({result.height:,} rows)")
 
 # ============================================
 # 10. Summary stats
@@ -314,5 +376,6 @@ print(f"Total OP Usage: {result['OP_Usage'].sum():,.2f}")
 print(f"Date Range:     {result['Bucket'].min()} to {result['Bucket'].max()}")
 print(f"Total Buckets:  {result.height:,}")
 print(f"Start Row:      {START_ROW}")
+print(f"Parquet saved:  {OUTPUT_FILE_PARQUET}")
+print(f"Raw CSV saved:  {OUTPUT_FILE_RAW_CSV}")
 print("=" * 50)
-
