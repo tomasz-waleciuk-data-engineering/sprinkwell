@@ -107,11 +107,23 @@ df_raw_export = df_raw_export.filter(
 )
 removed_count = original_count - df_raw_export.height
 
+if removed_count > 0:
+    print(f"⚠️ Removed {removed_count} rows with null values")
+
+# Cast P and OP to Float64 for delta calculation
+df_raw_export = df_raw_export.with_columns([
+    pl.col("P").cast(pl.Float64),
+    pl.col("OP").cast(pl.Float64),
+])
+
+# Add Delta columns (difference from previous row)
+df_raw_export = df_raw_export.with_columns([
+    (pl.col("P") - pl.col("P").shift(1)).alias("Delta_P"),
+    (pl.col("OP") - pl.col("OP").shift(1)).alias("Delta_OP"),
+])
+
 print(f"\nRaw readings sample:")
 print(df_raw_export.head(10))
-
-if removed_count > 0:
-    print(f"\n⚠️ Removed {removed_count} rows with null values")
 
 df_raw_export.write_csv(OUTPUT_FILE_RAW_CSV)
 print(f"✅ Saved {df_raw_export.height:,} rows to {OUTPUT_FILE_RAW_CSV}")
