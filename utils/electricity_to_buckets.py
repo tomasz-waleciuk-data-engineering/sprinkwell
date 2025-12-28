@@ -57,7 +57,7 @@ print(f"\nShape after starting from row {START_ROW}:", df.shape)
 print(df.head())
 
 # ============================================
-# 1.5 Save raw readings to CSV (human-readable)
+# 1.1 Save raw readings to CSV (human-readable)
 # ============================================
 print(f"\n💾 Preparing raw readings for export...")
 
